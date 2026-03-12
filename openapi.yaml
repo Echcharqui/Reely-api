@@ -1,0 +1,459 @@
+openapi: 3.0.3
+
+info:
+  title: Reely API
+  description: |
+    Express proxy for the TMDB API used by the Reely Angular app.
+    Secures TMDB credentials and standardises responses.
+
+    **Auth note:** the proxy handles TMDB authentication internally via
+    `TMDB_BEARER_TOKEN` or `TMDB_API_KEY`. Clients do not need to send
+    any credentials to this API.
+
+    All response bodies are forwarded directly from TMDB — refer to the
+    [TMDB API reference](https://developer.themoviedb.org/reference/intro/getting-started)
+    for full response schemas.
+  version: 1.0.0
+  contact:
+    name: echcharqui hamza
+
+servers:
+  - url: http://localhost:4000
+    description: Local development
+
+tags:
+  - name: Health
+    description: Service health check
+  - name: Config
+    description: TMDB global configuration
+  - name: Genres
+    description: Movie genre lists
+  - name: Movies
+    description: Movie lists and detail sub-resources
+  - name: Search
+    description: Full-text search
+  - name: Discover
+    description: Filtered movie discovery
+
+# ── Reusable components ───────────────────────────────────────────────────────
+components:
+  parameters:
+    language:
+      name: language
+      in: query
+      description: 'ISO 639-1 language tag (e.g. `en-US`, `fr-FR`)'
+      schema:
+        type: string
+        example: en-US
+
+    page:
+      name: page
+      in: query
+      description: Result page number (1-based, max 500)
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+        example: 1
+
+    movieId:
+      name: id
+      in: path
+      required: true
+      description: TMDB movie ID
+      schema:
+        type: integer
+        example: 550
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        timestamp:
+          type: string
+          format: date-time
+          example: '2026-03-11T10:00:00.000Z'
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: The resource you requested could not be found.
+        status_code:
+          type: integer
+          description: TMDB internal status code (only present for upstream errors)
+          example: 34
+
+    Genre:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 28
+        name:
+          type: string
+          example: Action
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+
+  # Health
+  /health:
+    get:
+      summary: Health check
+      description: Returns 200 when the service is running.
+      tags: [Health]
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  # Config
+  /config:
+    get:
+      summary: TMDB configuration
+      description: Returns image base URLs and available sizes from TMDB.
+      tags: [Config]
+      responses:
+        '200':
+          description: TMDB configuration object
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  images:
+                    type: object
+                    properties:
+                      base_url:
+                        type: string
+                        example: 'http://image.tmdb.org/t/p/'
+                      secure_base_url:
+                        type: string
+                        example: 'https://image.tmdb.org/t/p/'
+                      backdrop_sizes:
+                        type: array
+                        items:
+                          type: string
+                      poster_sizes:
+                        type: array
+                        items:
+                          type: string
+                      profile_sizes:
+                        type: array
+                        items:
+                          type: string
+
+  # Genres
+  /genres/movies:
+    get:
+      summary: Movie genre list
+      description: Returns the official list of TMDB movie genres.
+      tags: [Genres]
+      parameters:
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: List of genres
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genres:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Genre'
+
+  # Movie lists
+  /movies/trending/{timeWindow}:
+    get:
+      summary: Trending movies
+      description: Returns movies trending over the given time window.
+      tags: [Movies]
+      parameters:
+        - name: timeWindow
+          in: path
+          required: true
+          description: Aggregation window
+          schema:
+            type: string
+            enum: [day, week]
+            example: day
+        - $ref: '#/components/parameters/page'
+      responses:
+        '200':
+          description: Paginated trending movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/popular:
+    get:
+      summary: Popular movies
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated popular movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/top-rated:
+    get:
+      summary: Top-rated movies
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated top-rated movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/now-playing:
+    get:
+      summary: Movies currently in theatres
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated now-playing results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/upcoming:
+    get:
+      summary: Upcoming movie releases
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated upcoming movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # Movie detail sub-resources
+  /movies/{id}:
+    get:
+      summary: Movie details
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Full movie detail object
+          content:
+            application/json:
+              schema:
+                type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /movies/{id}/credits:
+    get:
+      summary: Cast & crew
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Credits object containing cast and crew arrays
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/{id}/videos:
+    get:
+      summary: Trailers and teasers
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: List of video objects (YouTube keys, types, etc.)
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/{id}/images:
+    get:
+      summary: Posters and backdrops
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+      responses:
+        '200':
+          description: Collections of poster and backdrop image objects
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/{id}/reviews:
+    get:
+      summary: User reviews
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated review results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/{id}/recommendations:
+    get:
+      summary: Recommended movies
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated recommended movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /movies/{id}/similar:
+    get:
+      summary: Similar movies
+      tags: [Movies]
+      parameters:
+        - $ref: '#/components/parameters/movieId'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated similar movie results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # Search
+  /search/movies:
+    get:
+      summary: Search movies by title
+      tags: [Search]
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search query string
+          schema:
+            type: string
+            example: batman
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated movie search results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /search/multi:
+    get:
+      summary: Multi-search (movies, TV shows, people)
+      tags: [Search]
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search query string
+          schema:
+            type: string
+            example: batman
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated multi-type search results
+          content:
+            application/json:
+              schema:
+                type: object
+
+  # Discover
+  /discover/movies:
+    get:
+      summary: Discover movies with filters
+      description: |
+        Flexible discovery endpoint. Combines the Postman "Discover Movies (base)"
+        and "Discover Movies (by genres)" requests into one route.
+        Pass `with_genres` to filter; omit it for a general popularity sort.
+      tags: [Discover]
+      parameters:
+        - name: sort_by
+          in: query
+          description: Sort order (defaults to `popularity.desc`)
+          schema:
+            type: string
+            default: popularity.desc
+            enum:
+              - popularity.asc
+              - popularity.desc
+              - revenue.asc
+              - revenue.desc
+              - primary_release_date.asc
+              - primary_release_date.desc
+              - vote_average.asc
+              - vote_average.desc
+              - vote_count.asc
+              - vote_count.desc
+        - name: with_genres
+          in: query
+          description: 'Comma-separated TMDB genre IDs (e.g. `28,12`)'
+          schema:
+            type: string
+            example: '28'
+        - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
+      responses:
+        '200':
+          description: Paginated discover results
+          content:
+            application/json:
+              schema:
+                type: object
