@@ -4,12 +4,15 @@ info:
   title: Reely API
   description: |
     Express proxy for the TMDB API used by the Reely Angular app.
-    Secures TMDB credentials and standardises responses.
+    Secures TMDB credentials server-side and exposes a clean, consistent REST interface.
 
-    **Auth note:** the proxy handles TMDB authentication internally via
-    `TMDB_BEARER_TOKEN` or `TMDB_API_KEY`. Clients do not need to send
-    any credentials to this API.
+    ## Authentication
+    All endpoints (except `/health`, `/openapi.json`, and `/docs`) require a client API key
+    sent in the `x-api-key` header. Click **Authorize** and paste your key to use Try-it-out.
 
+    TMDB authentication is handled internally — clients never touch TMDB credentials directly.
+
+    ## Response bodies
     All response bodies are forwarded directly from TMDB — refer to the
     [TMDB API reference](https://developer.themoviedb.org/reference/intro/getting-started)
     for full response schemas.
@@ -23,25 +26,39 @@ servers:
 
 tags:
   - name: Health
-    description: Service health check
+    description: Liveness probe — use this to check if the service is up
   - name: Config
-    description: TMDB global configuration
+    description: TMDB global configuration — image base URLs and available sizes
   - name: Genres
-    description: Movie genre lists
+    description: Official TMDB genre list used to label and filter movies
   - name: Movies
-    description: Movie lists and detail sub-resources
+    description: Movie lists (trending, popular, etc.) and per-movie sub-resources (credits, videos, images…)
   - name: Search
-    description: Full-text search
+    description: Full-text search across movies, TV shows, and people
   - name: Discover
-    description: Filtered movie discovery
+    description: Filter and sort movies by genre, release date, rating, and more
 
 # ── Reusable components ───────────────────────────────────────────────────────
+security:
+  - ApiKeyAuth: []
+
 components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: |
+        Client API key set in the `CLIENT_API_KEY` environment variable on the server.
+        Required for all routes except `/health`, `/openapi.json`, and `/docs`.
+
   parameters:
     language:
       name: language
       in: query
-      description: 'ISO 639-1 language tag (e.g. `en-US`, `fr-FR`)'
+      description: |
+        ISO 639-1 language tag for localised text (titles, overviews, etc.).
+        Defaults to `en-US` when omitted.
       schema:
         type: string
         example: en-US
@@ -49,10 +66,11 @@ components:
     page:
       name: page
       in: query
-      description: Result page number (1-based, max 500)
+      description: Page number for paginated results. Starts at 1, maximum is 500.
       schema:
         type: integer
         minimum: 1
+        maximum: 500
         default: 1
         example: 1
 
@@ -60,7 +78,7 @@ components:
       name: id
       in: path
       required: true
-      description: TMDB movie ID
+      description: TMDB numeric movie ID. You can find it in any movie URL on themoviedb.org.
       schema:
         type: integer
         example: 550
@@ -85,7 +103,7 @@ components:
           example: The resource you requested could not be found.
         status_code:
           type: integer
-          description: TMDB internal status code (only present for upstream errors)
+          description: TMDB internal status code — only present for upstream TMDB errors.
           example: 34
 
     Genre:
@@ -105,8 +123,11 @@ paths:
   /health:
     get:
       summary: Health check
-      description: Returns 200 when the service is running.
+      description: |
+        Returns `200 ok` when the service is running. No API key required.
+        Use this endpoint for uptime monitoring or container readiness probes.
       tags: [Health]
+      security: []
       responses:
         '200':
           description: Service is healthy
@@ -118,8 +139,12 @@ paths:
   # Config
   /config:
     get:
-      summary: TMDB configuration
-      description: Returns image base URLs and available sizes from TMDB.
+      summary: TMDB image configuration
+      description: |
+        Returns the TMDB configuration object containing the image CDN base URLs
+        and the list of supported poster, backdrop, and profile sizes.
+        Use this on app startup to build full image URLs:
+        `{secure_base_url}{size}{file_path}` — e.g. `https://image.tmdb.org/t/p/w500/abc.jpg`.
       tags: [Config]
       responses:
         '200':
@@ -142,26 +167,31 @@ paths:
                         type: array
                         items:
                           type: string
+                        example: [w300, w780, w1280, original]
                       poster_sizes:
                         type: array
                         items:
                           type: string
+                        example: [w92, w154, w185, w342, w500, w780, original]
                       profile_sizes:
                         type: array
                         items:
                           type: string
+                        example: [w45, w185, h632, original]
 
   # Genres
   /genres/movies:
     get:
       summary: Movie genre list
-      description: Returns the official list of TMDB movie genres.
+      description: |
+        Returns the complete and official list of TMDB movie genres with their IDs.
+        Genre IDs are stable and can be passed to `/discover/movies?with_genres=` to filter results.
       tags: [Genres]
       parameters:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: List of genres
+          description: Full list of movie genres
           content:
             application/json:
               schema:
@@ -176,21 +206,24 @@ paths:
   /movies/trending/{timeWindow}:
     get:
       summary: Trending movies
-      description: Returns movies trending over the given time window.
+      description: |
+        Returns movies that are trending on TMDB over the specified time window.
+        Use `day` for what's hot right now, or `week` for a broader trend signal.
       tags: [Movies]
       parameters:
         - name: timeWindow
           in: path
           required: true
-          description: Aggregation window
+          description: Aggregation window for the trending calculation.
           schema:
             type: string
             enum: [day, week]
             example: day
         - $ref: '#/components/parameters/page'
+        - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated trending movie results
+          description: Paginated list of trending movies
           content:
             application/json:
               schema:
@@ -199,13 +232,16 @@ paths:
   /movies/popular:
     get:
       summary: Popular movies
+      description: |
+        Returns movies ordered by TMDB's popularity score, which is based on
+        views, watchlist adds, votes, and release date proximity.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated popular movie results
+          description: Paginated list of popular movies
           content:
             application/json:
               schema:
@@ -214,13 +250,16 @@ paths:
   /movies/top-rated:
     get:
       summary: Top-rated movies
+      description: |
+        Returns movies with the highest average vote scores on TMDB.
+        Results are sorted by `vote_average` descending, weighted by vote count.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated top-rated movie results
+          description: Paginated list of top-rated movies
           content:
             application/json:
               schema:
@@ -228,14 +267,18 @@ paths:
 
   /movies/now-playing:
     get:
-      summary: Movies currently in theatres
+      summary: Now playing in theatres
+      description: |
+        Returns movies that are currently screening in cinemas.
+        The date range is determined by TMDB based on regional release schedules.
+        Pass `region` (ISO 3166-1 code, e.g. `US`, `GB`) to localise results.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated now-playing results
+          description: Paginated list of movies currently in theatres
           content:
             application/json:
               schema:
@@ -243,14 +286,17 @@ paths:
 
   /movies/upcoming:
     get:
-      summary: Upcoming movie releases
+      summary: Upcoming releases
+      description: |
+        Returns movies whose primary release date falls within the next few weeks.
+        Results are sorted by release date ascending. Pass `region` to filter by country.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated upcoming movie results
+          description: Paginated list of upcoming movie releases
           content:
             application/json:
               schema:
@@ -260,6 +306,9 @@ paths:
   /movies/{id}:
     get:
       summary: Movie details
+      description: |
+        Returns the full detail object for a single movie — title, overview, genres,
+        runtime, release date, vote average, production companies, and more.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
@@ -272,7 +321,7 @@ paths:
               schema:
                 type: object
         '404':
-          description: Movie not found
+          description: No movie found with the given ID
           content:
             application/json:
               schema:
@@ -281,50 +330,83 @@ paths:
   /movies/{id}/credits:
     get:
       summary: Cast & crew
+      description: |
+        Returns the cast and crew for the movie. Each cast member includes their
+        character name and order. Crew members include their department and job title.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Credits object containing cast and crew arrays
+          description: Object with `cast` and `crew` arrays
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /movies/{id}/videos:
     get:
-      summary: Trailers and teasers
+      summary: Trailers & teasers
+      description: |
+        Returns a list of videos associated with the movie — trailers, teasers, clips,
+        featurettes, and behind-the-scenes content. Most videos are hosted on YouTube;
+        use the `key` field to build the embed URL: `https://www.youtube.com/watch?v={key}`.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: List of video objects (YouTube keys, types, etc.)
+          description: Object with a `results` array of video objects
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /movies/{id}/images:
     get:
-      summary: Posters and backdrops
+      summary: Posters & backdrops
+      description: |
+        Returns all poster and backdrop images available for the movie.
+        Use the `file_path` field together with the base URL from `/config`
+        to construct the full image URL.
+        Note: omit `language` to get all language variants including originals.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
       responses:
         '200':
-          description: Collections of poster and backdrop image objects
+          description: Object with `posters` and `backdrops` arrays
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /movies/{id}/reviews:
     get:
       summary: User reviews
+      description: |
+        Returns paginated user-written reviews for the movie from TMDB members.
+        Each review includes the author, rating (if given), content, and creation date.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
@@ -332,15 +414,25 @@ paths:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated review results
+          description: Paginated list of reviews
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /movies/{id}/recommendations:
     get:
       summary: Recommended movies
+      description: |
+        Returns a list of movies that TMDB recommends based on the given movie.
+        Recommendations are personalised to the specific title using TMDB's
+        internal similarity and popularity signals.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
@@ -348,15 +440,25 @@ paths:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated recommended movie results
+          description: Paginated list of recommended movies
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /movies/{id}/similar:
     get:
       summary: Similar movies
+      description: |
+        Returns movies that share genres and keywords with the given movie.
+        Unlike recommendations, similar movies are matched purely on metadata
+        rather than user behaviour signals.
       tags: [Movies]
       parameters:
         - $ref: '#/components/parameters/movieId'
@@ -364,22 +466,32 @@ paths:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated similar movie results
+          description: Paginated list of similar movies
           content:
             application/json:
               schema:
                 type: object
+        '404':
+          description: Movie not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   # Search
   /search/movies:
     get:
       summary: Search movies by title
+      description: |
+        Full-text search against movie titles and original titles in TMDB.
+        Results are ranked by relevance. Use `query` as the search term —
+        partial matches and alternate titles are supported.
       tags: [Search]
       parameters:
         - name: query
           in: query
           required: true
-          description: Search query string
+          description: Search term — partial matches and alternate titles are supported.
           schema:
             type: string
             example: batman
@@ -387,7 +499,7 @@ paths:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated movie search results
+          description: Paginated movie search results ranked by relevance
           content:
             application/json:
               schema:
@@ -395,13 +507,17 @@ paths:
 
   /search/multi:
     get:
-      summary: Multi-search (movies, TV shows, people)
+      summary: Multi-search
+      description: |
+        Searches across movies, TV shows, and people in a single request.
+        Each result includes a `media_type` field (`movie`, `tv`, or `person`)
+        so you can render them differently in the UI.
       tags: [Search]
       parameters:
         - name: query
           in: query
           required: true
-          description: Search query string
+          description: Search term to match against titles and names.
           schema:
             type: string
             example: batman
@@ -409,7 +525,7 @@ paths:
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated multi-type search results
+          description: Paginated multi-type search results with a `media_type` discriminator
           content:
             application/json:
               schema:
@@ -420,14 +536,23 @@ paths:
     get:
       summary: Discover movies with filters
       description: |
-        Flexible discovery endpoint. Combines the Postman "Discover Movies (base)"
-        and "Discover Movies (by genres)" requests into one route.
-        Pass `with_genres` to filter; omit it for a general popularity sort.
+        Flexible discovery endpoint for browsing movies by any combination of
+        genre, sort order, release date, rating, and more.
+
+        **Common use cases:**
+        - Browse by genre: `?with_genres=28` (Action), `?with_genres=28,12` (Action + Adventure)
+        - Highest rated: `?sort_by=vote_average.desc`
+        - Recent releases: `?sort_by=primary_release_date.desc`
+        - No filters: defaults to `popularity.desc`
+
+        All query params are forwarded to TMDB as-is — refer to the
+        [TMDB Discover docs](https://developer.themoviedb.org/reference/discover-movie)
+        for the full list of supported filters.
       tags: [Discover]
       parameters:
         - name: sort_by
           in: query
-          description: Sort order (defaults to `popularity.desc`)
+          description: Sort order for the results. Defaults to `popularity.desc`.
           schema:
             type: string
             default: popularity.desc
@@ -444,15 +569,17 @@ paths:
               - vote_count.desc
         - name: with_genres
           in: query
-          description: 'Comma-separated TMDB genre IDs (e.g. `28,12`)'
+          description: |
+            Comma-separated list of TMDB genre IDs to filter by (AND logic).
+            Genre IDs can be retrieved from `/genres/movies`.
           schema:
             type: string
-            example: '28'
+            example: '28,12'
         - $ref: '#/components/parameters/page'
         - $ref: '#/components/parameters/language'
       responses:
         '200':
-          description: Paginated discover results
+          description: Paginated discover results matching the applied filters
           content:
             application/json:
               schema:

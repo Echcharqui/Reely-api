@@ -31,15 +31,15 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// ── API key authentication (all routes below this point are protected) ────────
-app.use(apiKeyAuth);
-
-// ── OpenAPI spec + Swagger UI ─────────────────────────────────────────────────
+// ── OpenAPI spec + Swagger UI (public) ───────────────────────────────────────
 const specPath = path.join(__dirname, '..', 'openapi.yaml');
 const spec = yaml.load(fs.readFileSync(specPath, 'utf8'));
 
-app.get('/openapi.json', (req, res) => res.json(spec));
+app.get('/openapi.json', (_req, res) => res.json(spec));
 app.use('/docs', swaggerUi.serve, swaggerUi.setup(spec, { explorer: true }));
+
+// ── API key authentication (all routes below this point are protected) ────────
+app.use(apiKeyAuth);
 
 // ── API routes ────────────────────────────────────────────────────────────────
 app.use('/', routes);
